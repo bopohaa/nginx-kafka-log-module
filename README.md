@@ -18,11 +18,32 @@ In this case, the `load_module` directive should be used in nginx.conf to load t
 ## Configuration
 
 ### kafka_log
-* **syntax**: `kafka_log kafka:topic body message_id`
+* **syntax**: `kafka_log kafka:topic body message_id [partiton_id]`
 * **default**: `none`
 * **context**: `location`
 
-Enables Kafka logging on the specified location. `topic`, `body` and `message_id` can contain nginx variables.
+Enables Kafka logging on the specified location. `topic`, `body`, `message_id` and `partiton_id` (optional) can contain nginx variables.
+
+### kafka_log_kafka_batch_num_messages
+* **syntax**: `kafka_log_kafka_batch_num_messages count`
+* **default**: `off`
+* **context**: `main`
+
+Set the maximum number of messages to wait for to accumulate in the local queue before sending off a message set. (librdkafka - `batch.num.messages`)
+
+### kafka_log_kafka_buffer_max_ms
+* **syntax**: `kafka_log_kafka_buffer_max_ms time`
+* **default**: `0s`
+* **context**: `main`
+
+Set how long to wait for batch.num.messages to fill up in the local queue. A lower value improves latency at the cost of lower throughput and higher per-message overhead. A higher value improves throughput at the expense of latency. The recommended value for high throughput is > 50ms. (librdkafka - `queue.buffering.max.ms`)
+
+### kafka_log_ignore_empty_messages
+* **syntax**: `kafka_log_ignore_empty_messages on|off`
+* **default**: `off`
+* **context**: `main`
+
+Disable out error to nginx log if message is empty
 
 ### kafka_log_kafka_client_id
 * **syntax**: `kafka_log_kafka_client_id client_id`
