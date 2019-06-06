@@ -39,6 +39,7 @@ typedef struct {
 #if (NGX_HAVE_LIBRDKAFKA)
     ngx_kafka_log_main_kafka_conf_t kafka;
 #endif
+	ngx_flag_t ignore_empty_messages;
 } ngx_http_kafka_log_main_conf_t;
 
 typedef struct {
@@ -56,12 +57,20 @@ static ngx_int_t ngx_http_kafka_log_post_config(ngx_conf_t *cf);
 static ngx_command_t ngx_http_kafka_log_commands[] = {
     { 
         ngx_string("kafka_log"),
-        NGX_HTTP_LOC_CONF|NGX_CONF_TAKE23,
+        NGX_HTTP_LOC_CONF|NGX_CONF_TAKE23| NGX_CONF_TAKE4,
         ngx_http_kafka_log_loc_output,
         NGX_HTTP_LOC_CONF_OFFSET,
         0,
         NULL
     },
+	{
+		ngx_string("kafka_log_ignore_empty_messages"),
+		NGX_HTTP_MAIN_CONF | NGX_CONF_TAKE1,
+		ngx_conf_set_flag_slot,
+		NGX_HTTP_MAIN_CONF_OFFSET,
+		offsetof(ngx_http_kafka_log_main_conf_t, ignore_empty_messages),
+		NULL
+	},
 #if (NGX_HAVE_LIBRDKAFKA)
     {
         ngx_string("kafka_log_kafka_client_id"),
@@ -135,6 +144,22 @@ static ngx_command_t ngx_http_kafka_log_commands[] = {
         offsetof(ngx_http_kafka_log_main_conf_t, kafka.backoff_ms),
         NULL
     },
+	{
+		ngx_string("kafka_log_kafka_batch_num_messages"),
+		NGX_HTTP_MAIN_CONF | NGX_CONF_TAKE1,
+		ngx_conf_set_num_slot,
+		NGX_HTTP_MAIN_CONF_OFFSET,
+		offsetof(ngx_http_kafka_log_main_conf_t, kafka.batch_num_messages),
+		NULL
+	},
+	{
+		ngx_string("kafka_log_kafka_buffer_max_ms"),
+		NGX_HTTP_MAIN_CONF | NGX_CONF_TAKE1,
+		ngx_conf_set_msec_slot,
+		NGX_HTTP_MAIN_CONF_OFFSET,
+		offsetof(ngx_http_kafka_log_main_conf_t, kafka.buffer_max_ms),
+		NULL
+	},
 #endif
     ngx_null_command
 };
@@ -227,7 +252,9 @@ static ngx_int_t
 ngx_http_kafka_log_log_handler(ngx_http_request_t *r) {
 
     ngx_http_kafka_log_loc_conf_t        *lc;
+	ngx_http_kafka_log_main_conf_t       *mc;
     ngx_str_t                           topic;
+	ngx_str_t                           partition_loc;
     ngx_str_t                           txt;
     size_t                              i;
     ngx_kafka_log_output_location_t     *arr;
@@ -241,6 +268,8 @@ ngx_http_kafka_log_log_handler(ngx_http_request_t *r) {
 #endif
 
     lc = ngx_http_get_module_loc_conf(r, ngx_http_kafka_log_module);
+
+	mc = ngx_http_get_module_main_conf(r, ngx_http_kafka_log_module);
 
     /* Bypass if number of location is empty */
     if (!lc->locations->nelts) {
@@ -268,8 +297,8 @@ ngx_http_kafka_log_log_handler(ngx_http_request_t *r) {
         }
 
         if (txt.len == 0) {
-            ngx_log_error(NGX_LOG_ERR, r->pool->log, 0,
-                "ignoring empty message");
+			if(mc->ignore_empty_messages == 0)
+				ngx_log_error(NGX_LOG_ERR, r->pool->log, 0, "ignoring empty message");
             continue;
         }
 
@@ -304,6 +333,16 @@ ngx_http_kafka_log_log_handler(ngx_http_request_t *r) {
                 continue;
             }
 
+			ngx_int_t partiton = mcf->kafka.partition;
+
+			if (location->kafka.partition!=NULL && ngx_http_complex_value(r, location->kafka.partition, &partition_loc) == NGX_OK) {
+				if (partition_loc.len > 0) {
+					ngx_int_t res = ngx_atoi(partition_loc.data, partition_loc.len);
+					if (res != NGX_ERROR)
+						partiton = res;
+				}
+			}
+
             if (location->kafka.http_msg_id_var) {
                 if (ngx_http_complex_value(r,
                         location->kafka.http_msg_id_var,
@@ -328,7 +367,7 @@ ngx_http_kafka_log_log_handler(ngx_http_request_t *r) {
             /* Send/Produce message. */
             if ((err =  rd_kafka_produce(
                             rkt,
-                            mcf->kafka.partition,
+				            partiton,
                             RD_KAFKA_MSG_F_COPY,
                             txt.data,
                             txt.len,
@@ -343,7 +382,7 @@ ngx_http_kafka_log_log_handler(ngx_http_request_t *r) {
                         "failed to produce to topic %s "
                         "partition %i: %s",
                         rd_kafka_topic_name(rkt),
-                        mcf->kafka.partition,
+						partiton,
                         errstr);
                 }
             } else {
@@ -388,6 +427,8 @@ ngx_http_kafka_log_create_main_conf(ngx_conf_t *cf) {
         return NULL;
     }
 
+	conf->ignore_empty_messages = NGX_CONF_UNSET;
+
 #if (NGX_HAVE_LIBRDKAFKA)
     ngx_rbtree_init(&conf->kafka.topics_rbtree, &conf->kafka.topics_sentinel, ngx_str_rbtree_insert_value);
 
@@ -403,9 +444,16 @@ ngx_http_kafka_log_create_main_conf(ngx_conf_t *cf) {
 static ngx_int_t
 ngx_http_kafka_log_init_worker(ngx_cycle_t *cycle)
 {
+	ngx_http_kafka_log_main_conf_t* conf =
+		ngx_http_cycle_get_module_main_conf(cycle, ngx_http_kafka_log_module);
+
+	if (conf == NULL)
+		return NGX_ERROR;
+
+	if (conf->ignore_empty_messages == NGX_CONF_UNSET)
+		conf->ignore_empty_messages = 0;
+
 #if (NGX_HAVE_LIBRDKAFKA)
-    ngx_http_kafka_log_main_conf_t *conf =
-        ngx_http_cycle_get_module_main_conf(cycle, ngx_http_kafka_log_module);;
     ngx_int_t rc;
 
     rc = ngx_kafka_log_configure_kafka(cycle->pool, &conf->kafka);
@@ -491,6 +539,7 @@ ngx_http_kafka_log_loc_output(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
                 &location);
     }
 
+	
 #if (NGX_HAVE_LIBRDKAFKA)
     /* if sink type is kafka, then set topic config for this location */
     else if (new_location->type == NGX_KAFKA_LOG_SINK_KAFKA) {
@@ -505,7 +554,7 @@ ngx_http_kafka_log_loc_output(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
             return NGX_CONF_ERROR;
         }
 
-        if (cf->args->nelts >= 4)
+        if (cf->args->nelts >= 4 && args[3].len > 1 && *(args[3].data) != '_')
         {
             /* compile message id */
             ngx_memzero(&ccv, sizeof(ngx_http_compile_complex_value_t));
@@ -521,6 +570,25 @@ ngx_http_kafka_log_loc_output(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
             }
             new_location->kafka.http_msg_id_var = ccv.complex_value;
         }
+
+		if (cf->args->nelts >= 5)
+		{
+			/* compile partition id */
+			ngx_memzero(&ccv, sizeof(ngx_http_compile_complex_value_t));
+
+			ccv.cf = cf;
+			ccv.value = &args[4];
+			ccv.complex_value = ngx_pcalloc(cf->pool, sizeof(*ccv.complex_value));
+			if (ccv.complex_value == NULL) {
+				return NGX_CONF_ERROR;
+			}
+			if (ngx_http_compile_complex_value(&ccv) != NGX_OK) {
+				return NGX_CONF_ERROR;
+			}
+			new_location->kafka.partition = ccv.complex_value;
+		}
+
+
     }
 #endif
 

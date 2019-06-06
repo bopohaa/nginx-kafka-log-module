@@ -269,6 +269,8 @@ ngx_kafka_log_init_kafka(
     kafka->buffer_max_messages = NGX_CONF_UNSET_UINT;
     kafka->backoff_ms          = NGX_CONF_UNSET_UINT;
     kafka->partition           = NGX_CONF_UNSET;
+	kafka->batch_num_messages  = NGX_CONF_UNSET_UINT;
+	kafka->buffer_max_ms       = NGX_CONF_UNSET_UINT;
 
     return NGX_OK;
 }
@@ -286,6 +288,8 @@ ngx_kafka_log_configure_kafka(ngx_pool_t *pool,
     static const char *conf_retry_backoff_ms_key   = "retry.backoff.ms";
     static const char *conf_bootstrap_servers_key  = "bootstrap.servers";
     static const char *conf_debug_key              = "debug";
+	static const char *conf_batch_num_messages_key = "batch.num.messages";
+	static const char* conf_buffer_max_ms_key      = "queue.buffering.max.ms";
 
     /* - default values - */
     static ngx_str_t  kafka_compression_default_value = ngx_string("snappy");
@@ -294,6 +298,8 @@ ngx_kafka_log_configure_kafka(ngx_pool_t *pool,
     static ngx_int_t  kafka_max_retries_default_value = 0;
     static ngx_int_t  kafka_buffer_max_messages_default_value = 100000;
     static ngx_msec_t kafka_backoff_ms_default_value = 10;
+	static ngx_int_t  kafka_batch_num_messages_default_value = 10000;
+	static ngx_int_t  kafka_buffer_max_ms_default_value = 0;
 
     /* set default values for unset params */
     if (conf->compression.data == NULL) {
@@ -324,6 +330,14 @@ ngx_kafka_log_configure_kafka(ngx_pool_t *pool,
         conf->log_level = kafka_log_level_default_value;
     }
 
+	if (conf->batch_num_messages == NGX_CONF_UNSET_UINT) {
+		conf->batch_num_messages = kafka_batch_num_messages_default_value;
+	}
+
+	if (conf->buffer_max_ms == NGX_CONF_UNSET_UINT) {
+		conf->buffer_max_ms = kafka_buffer_max_ms_default_value;
+	}
+
     /* create kafka configuration */
     conf->rkc = ngx_kafka_log_kafka_conf_new(pool);
     if (! conf->rkc) {
@@ -346,6 +360,14 @@ ngx_kafka_log_configure_kafka(ngx_pool_t *pool,
     ngx_kafka_log_kafka_conf_set_int(pool, conf->rkc,
         conf_retry_backoff_ms_key,
         conf->backoff_ms);
+
+	ngx_kafka_log_kafka_conf_set_int(pool, conf->rkc,
+		conf_batch_num_messages_key,
+		conf->batch_num_messages);
+
+	ngx_kafka_log_kafka_conf_set_int(pool, conf->rkc,
+		conf_buffer_max_ms_key,
+		conf->buffer_max_ms);
 
     ngx_kafka_log_kafka_conf_set_str(pool, conf->rkc,
             conf_client_id_key,
